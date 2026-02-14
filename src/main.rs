@@ -1,4 +1,9 @@
-use zcode::{agent::ChatGptAgent, cli::Cli, config, tools::Executor};
+use zcode::{
+    agent::{AgentProvider, GeminiAgent, Message, OpenAiAgent},
+    cli::Cli,
+    config,
+    tools::Executor,
+};
 use clap::Parser;
 use std::env;
 
@@ -6,22 +11,54 @@ use std::env;
 async fn main() {
     let cli = Cli::parse();
 
-    let api_key = config::load_api_key().unwrap_or_else(|| {
-        eprintln!("Set OPENAI_API_KEY env var or add api_key to ~/.config/zcode/config.toml");
+    let provider = cli
+        .provider
+        .unwrap_or_else(config::load_provider);
+
+    let api_key = config::load_api_key(provider).unwrap_or_else(|| {
+        let (env_var, config_hint) = match provider {
+            AgentProvider::OpenAi => {
+                ("OPENAI_API_KEY", "api_key in ~/.config/zcode/config.toml")
+            }
+            AgentProvider::Gemini => {
+                ("GEMINI_API_KEY", "gemini_api_key in ~/.config/zcode/config.toml")
+            }
+        };
+        eprintln!(
+            "Set {} env var or add {} for provider {:?}",
+            env_var, config_hint, provider
+        );
         std::process::exit(1);
     });
 
     let workspace = env::current_dir().expect("current dir");
-    let agent = ChatGptAgent::new(api_key);
     let executor = Executor::new(workspace);
 
+    match provider {
+        AgentProvider::OpenAi => {
+            let agent = OpenAiAgent::new(api_key);
+            run_with_agent(&agent, &executor, cli).await;
+        }
+        AgentProvider::Gemini => {
+            let agent = GeminiAgent::new(api_key);
+            run_with_agent(&agent, &executor, cli).await;
+        }
+    }
+}
+
+async fn run_with_agent<A: zcode::agent::Agent>(
+    agent: &A,
+    executor: &Executor,
+    cli: Cli,
+) {
+    let mut messages = Vec::new();
+
     if let Some(prompt) = cli.prompt {
-        run_agent(&agent, &executor, &mut Vec::new(), &prompt).await;
+        run_agent(agent, executor, &mut messages, &prompt).await;
     } else {
-        let mut messages = Vec::new();
         loop {
             if let Some(prompt) = read_prompt() {
-                run_agent(&agent, &executor, &mut messages, &prompt).await;
+                run_agent(agent, executor, &mut messages, &prompt).await;
             } else {
                 break;
             }
@@ -42,10 +79,10 @@ fn read_prompt() -> Option<String> {
     }
 }
 
-async fn run_agent(
-    agent: &ChatGptAgent,
+async fn run_agent<A: zcode::agent::Agent>(
+    agent: &A,
     executor: &Executor,
-    messages: &mut Vec<zcode::agent::Message>,
+    messages: &mut Vec<Message>,
     user_input: &str,
 ) {
     let mut next_input = Some(user_input);
@@ -72,9 +109,10 @@ async fn run_agent(
                         format!("Error: {}", e)
                     }
                 };
-                messages.push(zcode::agent::Message::ToolResult {
+                messages.push(Message::ToolResult {
                     role: "tool".into(),
                     tool_call_id: tc.id.clone(),
+                    function_name: tc.function.name.clone(),
                     content: result,
                 });
             }

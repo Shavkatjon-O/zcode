@@ -1,22 +1,7 @@
+use super::{AgentResponse, Message, ToolCall};
 use serde::{Deserialize, Serialize};
 
 const API_URL: &str = "https://api.openai.com/v1/chat/completions";
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(untagged)]
-pub enum Message {
-    Role { role: String, content: String },
-    Assistant {
-        role: String,
-        content: Option<String>,
-        tool_calls: Option<Vec<ToolCall>>,
-    },
-    ToolResult {
-        role: String,
-        tool_call_id: String,
-        content: String,
-    },
-}
 
 #[derive(Debug, Serialize)]
 struct Tool {
@@ -29,24 +14,6 @@ struct FunctionDef {
     name: String,
     description: String,
     parameters: serde_json::Value,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct ToolCall {
-    pub id: String,
-    #[serde(rename = "type", default = "default_tool_type")]
-    pub type_: String,
-    pub function: FunctionCall,
-}
-
-fn default_tool_type() -> String {
-    "function".into()
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct FunctionCall {
-    pub name: String,
-    pub arguments: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -158,13 +125,13 @@ fn tool_defs() -> Vec<Tool> {
 
 const SYSTEM_PROMPT: &str = r#"You are a CLI coding agent that helps developers. You can create files, read files, write files, list directories, run commands, and create directories. Work in the current directory unless told otherwise. Be concise. When creating or editing code, write complete implementations."#;
 
-pub struct ChatGptAgent {
+pub struct OpenAiAgent {
     client: reqwest::Client,
     api_key: String,
     model: String,
 }
 
-impl ChatGptAgent {
+impl OpenAiAgent {
     pub fn new(api_key: String) -> Self {
         Self {
             client: reqwest::Client::new(),
@@ -215,6 +182,7 @@ impl ChatGptAgent {
                 Message::ToolResult {
                     role,
                     tool_call_id,
+                    function_name: _,
                     content,
                 } => {
                     request_messages.push(serde_json::json!({
@@ -262,10 +230,4 @@ impl ChatGptAgent {
             tool_calls: msg.tool_calls,
         })
     }
-}
-
-#[derive(Debug)]
-pub struct AgentResponse {
-    pub content: Option<String>,
-    pub tool_calls: Option<Vec<ToolCall>>,
 }
