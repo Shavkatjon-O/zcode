@@ -1,0 +1,50 @@
+---
+description: Use conventional commits format for commit messages (no body)
+alwaysApply: true
+---
+
+# Commit Message Format
+
+When asked to generate or write commit messages, **always** use [Conventional Commits](https://www.conventionalcommits.org/) style.
+
+## Format
+
+Use only the subject line—**no body**, no footer:
+
+```
+<type>[optional scope]: <description>
+```
+
+**Use lowercase** for the entire message (type, scope, and description).
+
+## Allowed Types
+
+- **feat:** new feature
+- **fix:** bug fix
+- **docs:** documentation only
+- **style:** formatting, missing semicolons, etc. (no code change)
+- **refactor:** code change that neither fixes a bug nor adds a feature
+- **perf:** performance improvement
+- **test:** adding or updating tests
+- **build:** build system or external dependencies
+- **ci:** CI configuration changes
+- **chore:** other changes that don’t modify src or test files
+
+## Examples
+
+```
+feat: add CLI for running agent tasks
+fix: resolve API timeout in chat completion
+docs: update README installation steps
+refactor: simplify config loading logic
+chore: bump serde version to 1.0
+```
+
+## Scope (optional)
+
+Use scope when it helps clarify what changed:
+
+```
+feat(agent): support streaming responses
+fix(config): handle missing API key
+```
