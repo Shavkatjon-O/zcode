@@ -174,6 +174,40 @@ impl OpenAiAgent {
         }
     }
 
+    pub fn with_model(mut self, model: &str) -> Self {
+        self.model = model.to_string();
+        self
+    }
+
+    /// Single completion with no tools (e.g. for planning). Returns assistant content text.
+    pub async fn completion(&self, system: &str, user: &str) -> Result<String, String> {
+        let body = serde_json::json!({
+            "model": self.model,
+            "messages": [
+                { "role": "system", "content": system },
+                { "role": "user", "content": user }
+            ]
+        });
+
+        let resp = self
+            .client
+            .post(API_URL)
+            .bearer_auth(&self.api_key)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+
+        if !resp.status().is_success() {
+            let err_text = resp.text().await.unwrap_or_default();
+            return Err(format!("API error: {}", err_text));
+        }
+
+        let chat_resp: ChatResponse = resp.json().await.map_err(|e| e.to_string())?;
+        let choice = chat_resp.choices.into_iter().next().ok_or("No response")?;
+        Ok(choice.message.content.unwrap_or_default())
+    }
+
     pub async fn chat(
         &self,
         messages: &mut Vec<Message>,

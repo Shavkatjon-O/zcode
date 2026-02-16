@@ -1,7 +1,5 @@
-mod gemini;
 mod openai;
 
-pub use gemini::GeminiAgent;
 pub use openai::OpenAiAgent;
 
 use async_trait::async_trait;
@@ -48,24 +46,6 @@ pub struct AgentResponse {
     pub tool_calls: Option<Vec<ToolCall>>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AgentProvider {
-    OpenAi,
-    Gemini,
-}
-
-impl std::str::FromStr for AgentProvider {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "openai" | "gpt" => Ok(AgentProvider::OpenAi),
-            "gemini" => Ok(AgentProvider::Gemini),
-            _ => Err(format!("unknown provider: '{}'. use 'openai' or 'gemini'", s)),
-        }
-    }
-}
-
 #[async_trait]
 pub trait Agent: Send + Sync {
     async fn chat(
@@ -105,28 +85,5 @@ impl Agent for OpenAiAgent {
         F: FnMut(&str) + Send,
     {
         OpenAiAgent::chat_stream(self, messages, user_input, on_chunk).await
-    }
-}
-
-#[async_trait]
-impl Agent for GeminiAgent {
-    async fn chat(
-        &self,
-        messages: &mut Vec<Message>,
-        user_input: Option<&str>,
-    ) -> Result<AgentResponse, String> {
-        GeminiAgent::chat(self, messages, user_input).await
-    }
-
-    async fn chat_stream<F>(
-        &self,
-        messages: &mut Vec<Message>,
-        user_input: Option<&str>,
-        on_chunk: &mut F,
-    ) -> Result<AgentResponse, String>
-    where
-        F: FnMut(&str) + Send,
-    {
-        GeminiAgent::chat_stream(self, messages, user_input, on_chunk).await
     }
 }
