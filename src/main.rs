@@ -11,9 +11,7 @@ use std::env;
 async fn main() {
     let cli = Cli::parse();
 
-    let provider = cli
-        .provider
-        .unwrap_or_else(config::load_provider);
+    let provider = cli.provider;
 
     let api_key = config::load_api_key(provider).unwrap_or_else(|| {
         let (env_var, config_hint) = match provider {

@@ -10,9 +10,9 @@ pub struct Cli {
     #[arg(short, long)]
     pub prompt: Option<String>,
 
-    /// LLM provider: openai or gemini (default: openai, or ZCODE_PROVIDER env / config)
-    #[arg(long, value_parser = parse_provider)]
-    pub provider: Option<AgentProvider>,
+    /// LLM provider: openai or gemini
+    #[arg(long, value_parser = parse_provider, default_value = "openai")]
+    pub provider: AgentProvider,
 }
 
 fn parse_provider(s: &str) -> Result<AgentProvider, String> {
