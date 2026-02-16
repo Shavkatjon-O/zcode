@@ -58,15 +58,36 @@ fn read_file_call(path: &str) -> ToolCall {
     }
 }
 
+/// Produce a short preview of tool arguments for the UI (e.g. "path: src/..." or "command: cargo build").
+fn truncate_args(args_json: &str, tool_name: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(args_json).ok()?;
+    let obj = v.as_object()?;
+    let preview = match tool_name {
+        "run_command" => obj.get("command").and_then(|c| c.as_str()).map(|s| s.to_string()),
+        "read_file" | "write_file" | "create_file" => obj
+            .get("path")
+            .and_then(|p| p.as_str())
+            .map(|s| format!("path: {}", s)),
+        "list_dir" => obj
+            .get("path")
+            .and_then(|p| p.as_str())
+            .map(|s| format!("path: {}", s)),
+        _ => None,
+    };
+    preview
+}
+
 pub async fn run_once(api_key: &str, executor: &Executor, user_prompt: &str) {
     let planner = OpenAiAgent::new(api_key.to_string()).with_model(PLANNER_MODEL);
     let exec_agent = OpenAiAgent::new(api_key.to_string()).with_model(EXECUTOR_MODEL);
 
     // --- Phase 1: Gather root listing for planner ---
     ui::phase("Gathering project layout");
+    ui::reading_file(".");
     let root_listing = executor
         .execute(&list_dir_call("."))
         .unwrap_or_else(|e| format!("(list_dir failed: {})", e));
+    ui::reading_file_done(".");
     ui::phase_done("Project layout");
 
     // --- Phase 2: Plan (cheap model) ---
@@ -75,7 +96,7 @@ pub async fn run_once(api_key: &str, executor: &Executor, user_prompt: &str) {
         "User request:\n{}\n\nRoot directory listing:\n{}",
         user_prompt, root_listing
     );
-    let plan_text = match planner.completion(PLANNER_SYSTEM, &plan_user).await {
+    let plan_text = match ui::with_spinner("Planning", planner.completion(PLANNER_SYSTEM, &plan_user)).await {
         Ok(t) => t,
         Err(e) => {
             ui::error_msg(&e);
@@ -92,19 +113,22 @@ pub async fn run_once(api_key: &str, executor: &Executor, user_prompt: &str) {
     };
     let todos = plan.todos.unwrap_or_else(|| vec!["Complete the user request.".into()]);
     let summary = plan.summary.as_deref().unwrap_or("Task");
-    ui::phase_done("Planning");
     for (i, t) in todos.iter().enumerate() {
         ui::step(i + 1, todos.len(), t);
     }
 
     // --- Phase 3: Gather context (read paths_from_plan) ---
+    ui::phase("Gathering context");
     let paths_to_read = plan.paths_to_read.unwrap_or_default();
     let mut context_parts = vec![format!("Root listing:\n{}", root_listing)];
     for path in paths_to_read.iter().take(8) {
+        ui::reading_file(path);
         if let Ok(content) = executor.execute(&read_file_call(path)) {
             context_parts.push(format!("--- {} ---\n{}", path, content));
+            ui::reading_file_done(path);
         }
     }
+    ui::phase_done("Context gathered");
     let context_block = context_parts.join("\n\n");
 
     // --- Phase 4: Execute with strong model (tools + stream) ---
@@ -119,17 +143,23 @@ pub async fn run_once(api_key: &str, executor: &Executor, user_prompt: &str) {
     }];
 
     loop {
+        let mut first_chunk = true;
         let mut on_chunk = |chunk: &str| {
+            if std::mem::take(&mut first_chunk) {
+                ui::clear_thinking();
+            }
             ui::assistant_chunk(chunk);
             let _ = std::io::Write::flush(&mut std::io::stdout());
         };
 
+        ui::thinking();
         let resp = match exec_agent
             .chat_stream(&mut messages, None, &mut on_chunk)
             .await
         {
             Ok(r) => r,
             Err(e) => {
+                ui::clear_thinking();
                 ui::assistant_line();
                 ui::error_msg(&e);
                 break;
@@ -137,9 +167,13 @@ pub async fn run_once(api_key: &str, executor: &Executor, user_prompt: &str) {
         };
 
         if let Some(tool_calls) = resp.tool_calls {
+            if first_chunk {
+                ui::clear_thinking();
+            }
             ui::assistant_line();
             for tc in &tool_calls {
-                ui::tool_call(&tc.function.name);
+                let args_preview = truncate_args(&tc.function.arguments, &tc.function.name);
+                ui::tool_call_with_args(&tc.function.name, args_preview.as_deref());
                 let result = match executor.execute(tc) {
                     Ok(r) => {
                         ui::tool_result(&r);
@@ -160,6 +194,9 @@ pub async fn run_once(api_key: &str, executor: &Executor, user_prompt: &str) {
             continue;
         }
 
+        if first_chunk && resp.content.as_ref().map_or(true, |s| s.is_empty()) {
+            ui::clear_thinking();
+        }
         if resp.content.as_ref().map_or(false, |s| !s.is_empty()) {
             ui::assistant_line();
         }
@@ -172,13 +209,14 @@ pub async fn run_once(api_key: &str, executor: &Executor, user_prompt: &str) {
         "Task was: {}. User said: {}",
         summary, user_prompt
     );
-    match planner.completion(FINAL_CHECK_SYSTEM, &done_summary).await {
+    let final_msg = ui::with_spinner("Final check", planner.completion(FINAL_CHECK_SYSTEM, &done_summary)).await;
+    match final_msg {
         Ok(s) if !s.trim().is_empty() => {
-            ui::phase_done(&s.trim());
+            // with_spinner already printed "  ✓ Final check"; show the message on next line
+            println!("  {}", s.trim());
         }
-        _ => {
-            ui::phase_done("Done.");
-        }
+        Err(e) => ui::error_msg(&e),
+        _ => {}
     }
 }
 
