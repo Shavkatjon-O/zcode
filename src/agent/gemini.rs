@@ -1,5 +1,7 @@
 use super::{AgentResponse, Message, ToolCall};
 use serde::Deserialize;
+use std::pin::pin;
+use tokio_stream::StreamExt;
 
 const API_BASE: &str = "https://generativelanguage.googleapis.com/v1beta/models";
 const MODEL: &str = "gemini-2.0-flash";
@@ -304,6 +306,157 @@ impl GeminiAgent {
 
         Ok(AgentResponse {
             content: response_content,
+            tool_calls: None,
+        })
+    }
+
+    pub async fn chat_stream<F>(
+        &self,
+        messages: &mut Vec<Message>,
+        user_input: Option<&str>,
+        on_chunk: &mut F,
+    ) -> Result<AgentResponse, String>
+    where
+        F: FnMut(&str) + Send,
+    {
+        if let Some(input) = user_input {
+            messages.push(Message::Role {
+                role: "user".into(),
+                content: input.into(),
+            });
+        }
+
+        let contents = Self::message_to_contents(messages, None);
+        let body = serde_json::json!({
+            "contents": contents,
+            "systemInstruction": {
+                "parts": [{"text": SYSTEM_PROMPT}]
+            },
+            "tools": [{
+                "functionDeclarations": gemini_tool_defs()
+            }],
+            "generationConfig": {
+                "temperature": 0.1,
+                "topP": 0.95,
+                "maxOutputTokens": 8192
+            }
+        });
+
+        let url = format!(
+            "{}/{}:streamGenerateContent?key={}&alt=sse",
+            API_BASE, MODEL, self.api_key
+        );
+
+        let resp = self
+            .client
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let err_text = resp.text().await.map_err(|e| e.to_string())?;
+            return Err(format!("API error ({}): {}", status, err_text));
+        }
+
+        let mut stream = pin!(resp.bytes_stream());
+        let mut buffer = Vec::<u8>::new();
+        let mut content_acc = String::new();
+        let mut tool_calls: Vec<ToolCall> = Vec::new();
+
+        while let Some(chunk_result) = stream.next().await {
+            let chunk = chunk_result.map_err(|e| e.to_string())?;
+            buffer.extend_from_slice(&chunk);
+
+            while let Some(pos) = buffer.iter().position(|&b| b == b'\n') {
+                let line = std::mem::take(&mut buffer);
+                let (full_line, rest) = line.split_at(pos + 1);
+                buffer.extend_from_slice(rest);
+
+                let line_str = match std::str::from_utf8(full_line) {
+                    Ok(s) => s.trim(),
+                    Err(_) => continue,
+                };
+                let Some(data) = line_str.strip_prefix("data: ") else {
+                    continue;
+                };
+                if data.is_empty() {
+                    continue;
+                }
+
+                let Ok(gen_resp) = serde_json::from_str::<GenerateContentResponse>(data) else {
+                    continue;
+                };
+                if let Some(err) = gen_resp.error {
+                    return Err(format!("API error: {}", err.message));
+                }
+                let Some(candidates) = gen_resp.candidates else {
+                    continue;
+                };
+                let Some(candidate) = candidates.into_iter().next() else {
+                    continue;
+                };
+                let Some(content) = candidate.content else {
+                    continue;
+                };
+                let parts = content.parts.unwrap_or_default();
+
+                for (i, part) in parts.iter().enumerate() {
+                    if let Some(text) = &part.text {
+                        if !text.is_empty() {
+                            on_chunk(text);
+                            content_acc.push_str(text);
+                        }
+                    }
+                    if let Some(fc) = &part.function_call {
+                        let args_str =
+                            serde_json::to_string(&fc.args).unwrap_or_else(|_| "{}".to_string());
+                        tool_calls.push(ToolCall {
+                            id: format!("gemini-{}", i),
+                            type_: "function".into(),
+                            function: super::FunctionCall {
+                                name: fc.name.clone(),
+                                arguments: args_str,
+                            },
+                        });
+                    }
+                }
+            }
+        }
+
+        let content = if content_acc.is_empty() {
+            None
+        } else {
+            Some(content_acc)
+        };
+        let tool_calls = if tool_calls.is_empty() {
+            None
+        } else {
+            Some(tool_calls.clone())
+        };
+
+        if tool_calls.is_some() {
+            messages.push(Message::Assistant {
+                role: "assistant".into(),
+                content: content.clone(),
+                tool_calls: tool_calls.clone(),
+            });
+            return Ok(AgentResponse {
+                content: None,
+                tool_calls,
+            });
+        }
+
+        messages.push(Message::Assistant {
+            role: "assistant".into(),
+            content: content.clone(),
+            tool_calls: None,
+        });
+
+        Ok(AgentResponse {
+            content,
             tool_calls: None,
         })
     }

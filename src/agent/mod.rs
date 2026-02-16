@@ -4,6 +4,7 @@ mod openai;
 pub use gemini::GeminiAgent;
 pub use openai::OpenAiAgent;
 
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -65,14 +66,26 @@ impl std::str::FromStr for AgentProvider {
     }
 }
 
+#[async_trait]
 pub trait Agent: Send + Sync {
-    fn chat(
+    async fn chat(
         &self,
         messages: &mut Vec<Message>,
         user_input: Option<&str>,
-    ) -> impl std::future::Future<Output = Result<AgentResponse, String>> + Send;
+    ) -> Result<AgentResponse, String>;
+
+    /// Same as chat but streams content to `on_chunk` as it arrives (e.g. for live terminal output).
+    async fn chat_stream<F>(
+        &self,
+        messages: &mut Vec<Message>,
+        user_input: Option<&str>,
+        on_chunk: &mut F,
+    ) -> Result<AgentResponse, String>
+    where
+        F: FnMut(&str) + Send;
 }
 
+#[async_trait]
 impl Agent for OpenAiAgent {
     async fn chat(
         &self,
@@ -81,8 +94,21 @@ impl Agent for OpenAiAgent {
     ) -> Result<AgentResponse, String> {
         OpenAiAgent::chat(self, messages, user_input).await
     }
+
+    async fn chat_stream<F>(
+        &self,
+        messages: &mut Vec<Message>,
+        user_input: Option<&str>,
+        on_chunk: &mut F,
+    ) -> Result<AgentResponse, String>
+    where
+        F: FnMut(&str) + Send,
+    {
+        OpenAiAgent::chat_stream(self, messages, user_input, on_chunk).await
+    }
 }
 
+#[async_trait]
 impl Agent for GeminiAgent {
     async fn chat(
         &self,
@@ -90,5 +116,17 @@ impl Agent for GeminiAgent {
         user_input: Option<&str>,
     ) -> Result<AgentResponse, String> {
         GeminiAgent::chat(self, messages, user_input).await
+    }
+
+    async fn chat_stream<F>(
+        &self,
+        messages: &mut Vec<Message>,
+        user_input: Option<&str>,
+        on_chunk: &mut F,
+    ) -> Result<AgentResponse, String>
+    where
+        F: FnMut(&str) + Send,
+    {
+        GeminiAgent::chat_stream(self, messages, user_input, on_chunk).await
     }
 }

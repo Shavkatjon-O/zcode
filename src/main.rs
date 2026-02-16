@@ -86,7 +86,12 @@ async fn run_agent<A: zcode::agent::Agent>(
     let mut next_input = Some(user_input);
 
     loop {
-        let resp = match agent.chat(messages, next_input.take()).await {
+        let mut on_chunk = |chunk: &str| {
+            print!("{}", chunk);
+            let _ = std::io::Write::flush(&mut std::io::stdout());
+        };
+
+        let resp = match agent.chat_stream(messages, next_input.take(), &mut on_chunk).await {
             Ok(r) => r,
             Err(e) => {
                 eprintln!("Error: {}", e);
@@ -95,8 +100,10 @@ async fn run_agent<A: zcode::agent::Agent>(
         };
 
         if let Some(tool_calls) = resp.tool_calls {
+            println!(); // newline after any streamed content
             for tc in &tool_calls {
                 print!("[{}] ", tc.function.name);
+                let _ = std::io::Write::flush(&mut std::io::stdout());
                 let result = match executor.execute(tc) {
                     Ok(r) => {
                         println!("-> {}", r);
@@ -118,10 +125,8 @@ async fn run_agent<A: zcode::agent::Agent>(
             continue;
         }
 
-        if let Some(content) = resp.content {
-            if !content.is_empty() {
-                println!("{}", content.trim());
-            }
+        if resp.content.is_some() && !resp.content.as_ref().map_or(true, |s| s.is_empty()) {
+            println!(); // newline after streamed content
         }
         break;
     }
