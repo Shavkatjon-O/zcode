@@ -1,49 +1,34 @@
 # zcode
 
-CLI coding agent powered by LLMs. Like Claude Code or Cursor, but in the terminal.
+CLI coding agent powered by OpenAI — multi-step reasoning in the terminal.
+
+## Demo
+
+zcode plans and runs tasks: create projects, edit files, run commands — from a single prompt.
+
+![zcode demo — creating a React app from a prompt](assets/demo.png)
 
 ## Setup
 
-Choose a provider (**OpenAI** or **Gemini**) and set the matching API key.
-
-### OpenAI (default)
+Set your OpenAI API key:
 
 ```bash
 export OPENAI_API_KEY="sk-..."
 ```
 
-### Gemini
-
-```bash
-export GEMINI_API_KEY="your-gemini-api-key"
-```
-
 Or create `~/.config/zcode/config.toml`:
 
 ```toml
-provider = "openai"   # or "gemini"
-api_key = "sk-..."   # for OpenAI
-gemini_api_key = "..."  # for Gemini
+api_key = "sk-..."
 ```
 
 ## Usage
 
 ```bash
-# Single prompt (uses default provider from config/env)
-zcode -p "Create a hello world in Rust"
-
-# Force OpenAI
-zcode --provider openai -p "List files in current dir"
-
-# Force Gemini
-zcode --provider gemini -p "List files in current dir"
-
-# Interactive REPL
-zcode
+zcode -p "Create a hello world in Rust"   # one-off prompt
+zcode                                    # interactive REPL
 ```
 
-Provider can also be set via `ZCODE_PROVIDER` env var (e.g. `openai` or `gemini`).
+## Capabilities
 
-## Tools
-
-The agent can create files, read files, write files, list directories, run shell commands, and create directories. It works in the current directory.
+Runs in the current directory. Can create/edit files, list dirs, run shell commands.
